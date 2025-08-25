@@ -2,17 +2,10 @@ import sys
 import os
 import pandas as pd
 import numpy as np
-import sounddevice as sd
 import soundfile as sf
-import whisper
-from pypinyin import pinyin, Style
 import tempfile
-import threading
-import queue
 from difflib import SequenceMatcher
 import torch
-import unicodedata
-import opencc  # For traditional/simplified conversion
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QGridLayout, QLabel, QPushButton, 
                             QTextEdit, QFileDialog, QMessageBox, QProgressBar,
@@ -25,16 +18,7 @@ from PyQt6.QtCore import QUrl
 
 # Add your Spark-TTS path
 sys.path.append(os.path.expanduser("~/software/Spark-TTS/"))
-sys.path.append(os.path.expanduser("~/software/SenseVoice/"))
 from cli.SparkTTS import SparkTTS
-
-try:
-    from funasr import AutoModel
-    from funasr.utils.postprocess_utils import rich_transcription_postprocess
-    SENSEVOICE_AVAILABLE = True
-except ImportError:
-    SENSEVOICE_AVAILABLE = False
-    print("SenseVoice not available - falling back to Whisper only")
 
 class ModelLoader(QThread):
     progress = pyqtSignal(str)
@@ -42,40 +26,17 @@ class ModelLoader(QThread):
     
     def run(self):
         try:
-            self.progress.emit("Loading Whisper model...")
-            whisper_model = whisper.load_model("base")
-            
             self.progress.emit("Loading SparkTTS model...")
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             model_dir = "/home/richard/software/Spark-TTS/pretrained_models/Spark-TTS-0.5B/"
             spark_tts_model = SparkTTS(model_dir, device)
             
-            # Load SenseVoice if available
-            sensevoice_model = None
-            if SENSEVOICE_AVAILABLE:
-                try:
-                    self.progress.emit("Loading SenseVoice model...")
-                    sensevoice_model = AutoModel(
-                        model="iic/SenseVoiceSmall",  # Use ModelScope identifier instead of local path
-                        trust_remote_code=True,
-                        remote_code="/home/richard/software/SenseVoice/model.py",
-                        vad_model="fsmn-vad",
-                        vad_kwargs={"max_single_segment_time": 30000},
-                        device="cuda:0" if torch.cuda.is_available() else "cpu",
-                        disable_update=True,  # Skip update checks for faster loading
-                    )
-                except Exception as e:
-                    print(f"Failed to load SenseVoice: {e}")
-                    sensevoice_model = None
-            
-            self.finished.emit(True, "Models loaded successfully!")
-            # Store models in thread for main thread to access
-            self.whisper_model = whisper_model
+            self.finished.emit(True, "SparkTTS model loaded successfully!")
+            # Store model in thread for main thread to access
             self.spark_tts_model = spark_tts_model
-            self.sensevoice_model = sensevoice_model
             
         except Exception as e:
-            self.finished.emit(False, f"Error loading models: {str(e)}")
+            self.finished.emit(False, f"Error loading SparkTTS model: {str(e)}")
 
 class AudioGenerator(QThread):
     finished = pyqtSignal(bool, str, str)  # success, message, audio_path
@@ -202,9 +163,7 @@ class MandarinListeningPractice(QMainWindow):
         self.csv_filepath = None
         self.current_index = 0
         self.models_loaded = False
-        self.whisper_model = None
         self.spark_tts_model = None
-        self.sensevoice_model = None
         self.current_audio_path = None
         
         # Audio player
@@ -235,7 +194,7 @@ class MandarinListeningPractice(QMainWindow):
         
         top_layout.addStretch()
         
-        self.model_status_label = QLabel("Loading models...")
+        self.model_status_label = QLabel("Loading SparkTTS...")
         top_layout.addWidget(self.model_status_label)
         
         main_layout.addWidget(top_group)
@@ -372,15 +331,13 @@ class MandarinListeningPractice(QMainWindow):
         """Handle model loading completion"""
         if success:
             self.models_loaded = True
-            self.whisper_model = self.model_loader.whisper_model
             self.spark_tts_model = self.model_loader.spark_tts_model
-            self.sensevoice_model = self.model_loader.sensevoice_model
-            self.model_status_label.setText("✓ Models ready")
+            self.model_status_label.setText("✓ SparkTTS ready")
             self.model_status_label.setStyleSheet("color: green;")
         else:
             self.model_status_label.setText("✗ Model loading failed")
             self.model_status_label.setStyleSheet("color: red;")
-            QMessageBox.critical(self, "Error", f"Failed to load models:\n{message}")
+            QMessageBox.critical(self, "Error", f"Failed to load SparkTTS model:\n{message}")
         
         self.progress_bar.setVisible(False)
         self.update_ui_state()
