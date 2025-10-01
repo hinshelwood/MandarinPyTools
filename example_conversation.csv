@@ -1,0 +1,12 @@
+turn_id,bot_zh,bot_pinyin,bot_eng,expected_response_zh,expected_pinyin,expected_eng,next_turn_id
+1,你好！我叫美玲。你叫什么名字？,nǐ hǎo! wǒ jiào měi líng. nǐ jiào shén me míng zi?,Hello! My name is Měilíng. What's your name?,我叫[名字],wǒ jiào [míng zi],My name is [name],2
+2,很高兴认识你！你今天怎么样？,hěn gāo xìng rèn shi nǐ! nǐ jīn tiān zěn me yàng?,Nice to meet you! How are you today?,我很好谢谢,wǒ hěn hǎo xiè xiè,I'm fine thank you,3
+3,你喜欢学中文吗？,nǐ xǐ huān xué zhōng wén ma?,Do you like studying Chinese?,喜欢我很喜欢,xǐ huān wǒ hěn xǐ huān,Yes I really like it,4
+4,太好了！你学了多长时间？,tài hǎo le! nǐ xué le duō cháng shí jiān?,That's great! How long have you been studying?,我学了一年,wǒ xué le yī nián,I've been studying for one year,5
+5,一年了！很厉害！你每天练习吗？,yī nián le! hěn lì hài! nǐ měi tiān liàn xí ma?,One year! That's impressive! Do you practice every day?,对我每天练习,duì wǒ měi tiān liàn xí,Yes I practice every day,6
+6,你最喜欢什么中国菜？,nǐ zuì xǐ huān shén me zhōng guó cài?,What's your favorite Chinese food?,我喜欢饺子,wǒ xǐ huān jiǎo zi,I like dumplings,7
+7,饺子很好吃！你会做饺子吗？,jiǎo zi hěn hǎo chī! nǐ huì zuò jiǎo zi ma?,Dumplings are delicious! Can you make dumplings?,不会我不会做,bú huì wǒ bú huì zuò,No I can't make them,8
+8,没关系！学做饭也很有趣。你有空的时候喜欢做什么？,méi guān xi! xué zuò fàn yě hěn yǒu qù. nǐ yǒu kòng de shí hòu xǐ huān zuò shén me?,That's okay! Learning to cook is fun too. What do you like to do in your free time?,我喜欢看电影,wǒ xǐ huān kàn diàn yǐng,I like watching movies,9
+9,看电影很有意思！你看中文电影吗？,kàn diàn yǐng hěn yǒu yì si! nǐ kàn zhōng wén diàn yǐng ma?,Watching movies is interesting! Do you watch Chinese movies?,有时候看,yǒu shí hòu kàn,Sometimes I watch them,10
+10,非常好！继续加油！你还有什么问题要问我吗？,fēi cháng hǎo! jì xù jiā yóu! nǐ hái yǒu shén me wèn tí yào wèn wǒ ma?,Very good! Keep it up! Do you have any questions for me?,没有谢谢你,méi yǒu xiè xiè nǐ,No thank you,11
+11,不客气！我们下次再聊吧。再见！,bú kè qi! wǒ men xià cì zài liáo ba. zài jiàn!,You're welcome! Let's chat again next time. Goodbye!,再见,zài jiàn,Goodbye,
