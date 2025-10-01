@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QLabel, QPushButton, QFileDialog, 
                             QMessageBox, QScrollArea, QFrame, QCheckBox,
                             QSlider, QGroupBox, QComboBox, QDialog, QLineEdit)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
 from PyQt6.QtGui import QFont
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtCore import QUrl
@@ -117,6 +117,34 @@ class APIKeyDialog(QDialog):
             'api_key': self.api_key_input.text().strip(),
             'model': model
         }
+
+class TranslationThread(QThread):
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, api_key, model, chinese_text):
+        super().__init__()
+        self.api_key = api_key
+        self.model = model
+        self.chinese_text = chinese_text
+    
+    def run(self):
+        try:
+            client = anthropic.Anthropic(api_key=self.api_key)
+            
+            response = client.messages.create(
+                model=self.model,
+                max_tokens=100,
+                messages=[{
+                    "role": "user",
+                    "content": f"Translate this Chinese to natural English: {self.chinese_text}"
+                }]
+            )
+            
+            translation = response.content[0].text
+            self.finished.emit(True, translation)
+            
+        except Exception as e:
+            self.finished.emit(False, f"Translation error: {str(e)}")
 
 class ClaudeConversationThread(QThread):
     finished = pyqtSignal(bool, str, str)
@@ -283,12 +311,16 @@ class AudioTranscriber(QThread):
 
 class ChatBubble(QFrame):
     play_audio = pyqtSignal(str)
+    translate_requested = pyqtSignal(str, object)  # text, bubble_widget
     
     def __init__(self, text, is_bot=True, audio_path=None, show_chinese=True, 
-                 show_pinyin=True, pinyin_text="", parent=None):
+                 show_pinyin=True, pinyin_text="", parent=None, allow_translation=False):
         super().__init__(parent)
         self.audio_path = audio_path
         self.is_bot = is_bot
+        self.chinese_text = text
+        self.allow_translation = allow_translation
+        self.translation_label = None
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 5, 10, 5)
@@ -298,29 +330,29 @@ class ChatBubble(QFrame):
         
         bubble_frame = QFrame()
         bubble_frame.setObjectName("bubble")
-        bubble_layout = QVBoxLayout(bubble_frame)
-        bubble_layout.setSpacing(3)
+        self.bubble_layout = QVBoxLayout(bubble_frame)
+        self.bubble_layout.setSpacing(3)
         
         if audio_path:
             audio_btn = QPushButton("🔊")
             audio_btn.setMaximumSize(30, 30)
             audio_btn.clicked.connect(lambda: self.play_audio.emit(audio_path))
             audio_btn.setStyleSheet("background: transparent; border: none; font-size: 18px;")
-            bubble_layout.addWidget(audio_btn)
+            self.bubble_layout.addWidget(audio_btn)
         
         if show_chinese and text:
             chinese_label = QLabel(text)
             chinese_label.setFont(QFont("Noto Sans CJK SC", 14))
             chinese_label.setWordWrap(True)
             chinese_label.setStyleSheet("background: transparent;")
-            bubble_layout.addWidget(chinese_label)
+            self.bubble_layout.addWidget(chinese_label)
         
         if show_pinyin and pinyin_text:
             pinyin_label = QLabel(pinyin_text)
             pinyin_label.setFont(QFont("Consolas", 10))
             pinyin_label.setWordWrap(True)
             pinyin_label.setStyleSheet("color: #666; background: transparent;")
-            bubble_layout.addWidget(pinyin_label)
+            self.bubble_layout.addWidget(pinyin_label)
         
         if is_bot:
             bubble_frame.setStyleSheet("""
@@ -345,6 +377,29 @@ class ChatBubble(QFrame):
         
         if not is_bot:
             layout.addStretch()
+        
+        # Install event filter for right-click if translation allowed
+        if allow_translation:
+            bubble_frame.installEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        if self.allow_translation:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.RightButton:
+                    self.translate_requested.emit(self.chinese_text, self)
+                    return True
+        return super().eventFilter(obj, event)
+    
+    def show_translation(self, translation_text):
+        if self.translation_label is None:
+            self.translation_label = QLabel(translation_text)
+            self.translation_label.setFont(QFont("Arial", 10))
+            self.translation_label.setWordWrap(True)
+            self.translation_label.setStyleSheet("color: #0066cc; font-style: italic; background: transparent; margin-top: 5px;")
+            self.bubble_layout.addWidget(self.translation_label)
+        else:
+            self.translation_label.setText(translation_text)
+            self.translation_label.show()
 
 class SettingsDialog(QDialog):
     def __init__(self, parent, show_chinese, show_pinyin, current_speed):
@@ -678,9 +733,11 @@ class MeilingConversationApp(QMainWindow):
                 text, is_bot=True, audio_path=audio_path,
                 show_chinese=self.show_chinese,
                 show_pinyin=self.show_pinyin,
-                pinyin_text=pinyin_text
+                pinyin_text=pinyin_text,
+                allow_translation=True
             )
             bubble.play_audio.connect(self.play_audio)
+            bubble.translate_requested.connect(self.translate_text)
             
             self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
             
@@ -697,6 +754,30 @@ class MeilingConversationApp(QMainWindow):
             url = QUrl.fromLocalFile(os.path.abspath(audio_path))
             self.media_player.setSource(url)
             self.media_player.play()
+    
+    def translate_text(self, chinese_text, bubble_widget):
+        if not self.config.get('api_key'):
+            QMessageBox.warning(self, "API Key Missing", "Please configure your API key first.")
+            return
+        
+        self.status_label.setText("Translating...")
+        
+        self.translation_thread = TranslationThread(
+            self.config['api_key'],
+            self.config.get('model', 'claude-3-5-haiku-20241022'),
+            chinese_text
+        )
+        self.translation_thread.finished.connect(
+            lambda success, translation: self.on_translation_received(success, translation, bubble_widget)
+        )
+        self.translation_thread.start()
+    
+    def on_translation_received(self, success, translation, bubble_widget):
+        if success:
+            bubble_widget.show_translation(f"📖 {translation}")
+            self.status_label.setText("Translation complete")
+        else:
+            self.status_label.setText("Translation failed")
     
     def start_recording(self):
         if self.selected_device is None:
