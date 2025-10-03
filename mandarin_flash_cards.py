@@ -279,25 +279,28 @@ class MandarinFlashcardApp(QMainWindow):
         question_display_layout = QHBoxLayout()
         
         # Left panel: Chinese characters
-        self.question_text = QTextEdit()
-        self.question_text.setFont(QFont("Noto Sans CJK SC", 120))
+        # self.question_text = QTextEdit()
+        self.question_text = QLabel() # manual_debug
+
+        self.question_text.setFont(QFont("Noto Sans CJK SC", 24))
         self.question_text.setMinimumHeight(250)
         self.question_text.setMaximumHeight(300)
-        self.question_text.setReadOnly(True)
+        #self.question_text.setReadOnly(True)
         self.question_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.question_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.question_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        #self.question_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        #self.question_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         question_display_layout.addWidget(self.question_text)
         
         # Right panel: Pinyin
-        self.pinyin_text = QTextEdit()
-        self.pinyin_text.setFont(QFont("Consolas", 64))
+        #self.pinyin_text = QTextEdit()
+        self.pinyin_text = QLabel()
+        self.pinyin_text.setFont(QFont("Consolas", 24))
         self.pinyin_text.setMinimumHeight(250)
         self.pinyin_text.setMaximumHeight(300)
-        self.pinyin_text.setReadOnly(True)
+        #self.pinyin_text.setReadOnly(True)
         self.pinyin_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pinyin_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.pinyin_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        #self.pinyin_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        #self.pinyin_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.pinyin_text.setStyleSheet("color: #555; background-color: #f9f9f9;")
         question_display_layout.addWidget(self.pinyin_text)
         
@@ -799,11 +802,13 @@ class MandarinFlashcardApp(QMainWindow):
             pinyin_display = str(row.get('pinyin', ''))
             
             # Display Chinese in left panel, Pinyin in right panel
-            self.question_text.setPlainText(question)
-            self.question_text.setFont(QFont("Noto Sans CJK SC", 120))
+            #self.question_text.setPlainText(question)
+            self.question_text.setText(question)
+            self.question_text.setFont(QFont("Noto Sans CJK SC", 64))
             
             if self.pinyin_hints_enabled:
-                self.pinyin_text.setPlainText(pinyin_display)
+                #self.pinyin_text.setPlainText(pinyin_display)
+                self.pinyin_text.setText(pinyin_display)
                 self.pinyin_text.setFont(QFont("Consolas", 64))
                 self.pinyin_text.setVisible(True)
             else:
@@ -815,12 +820,14 @@ class MandarinFlashcardApp(QMainWindow):
             pinyin_display = str(row.get('pinyin', ''))
             
             # For English to Chinese, show English in main area
-            self.question_text.setPlainText(question)
+            #self.question_text.setPlainText(question)
+            self.question_text.setText(question)
             self.question_text.setFont(QFont("Arial", 64))
             
             # Show pinyin hint when answer is revealed
             if self.pinyin_hints_enabled and self.show_answer:
-                self.pinyin_text.setPlainText(pinyin_display)
+                #self.pinyin_text.setPlainText(pinyin_display)
+                self.pinyin_text.setText(pinyin_display)
                 self.pinyin_text.setFont(QFont("Consolas", 64))
                 self.pinyin_text.setVisible(True)
             else:
@@ -914,7 +921,7 @@ class MandarinFlashcardApp(QMainWindow):
         if pd.isna(current_scores) or not str(current_scores).strip():
             scores_list = []
         else:
-            scores_list = [int(x) for x in str(current_scores).split(',') if x.strip()]
+            scores_list = [int(float(x)) for x in str(current_scores).split(',') if x.strip()]
         
         scores_list.append(score)
         self.df.loc[original_idx, score_col] = ','.join(map(str, scores_list))
@@ -1018,8 +1025,9 @@ class MandarinFlashcardApp(QMainWindow):
         
         # Always generate audio for the Chinese text
         study_idx = self.current_index
-        original_idx = self.study_df.iloc[study_idx].name
-        text = str(self.df.loc[original_idx, 'zh'])
+        #original_idx = self.study_df.iloc[study_idx].name
+        #text = str(self.df.loc[original_idx, 'zh'])
+        text = str(self.study_df.iloc[study_idx]['zh'])
         
         self.audio_generator = AudioGenerator(self.spark_tts_model, text, self.current_speed)
         self.audio_generator.progress.connect(self.update_status)
