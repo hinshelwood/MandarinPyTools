@@ -804,12 +804,12 @@ class MandarinFlashcardApp(QMainWindow):
             # Display Chinese in left panel, Pinyin in right panel
             #self.question_text.setPlainText(question)
             self.question_text.setText(question)
-            self.question_text.setFont(QFont("Noto Sans CJK SC", 64))
+            self.question_text.setFont(QFont("Noto Sans CJK SC", 36))
             
             if self.pinyin_hints_enabled:
                 #self.pinyin_text.setPlainText(pinyin_display)
                 self.pinyin_text.setText(pinyin_display)
-                self.pinyin_text.setFont(QFont("Consolas", 64))
+                self.pinyin_text.setFont(QFont("Consolas", 36))
                 self.pinyin_text.setVisible(True)
             else:
                 self.pinyin_text.setVisible(False)
@@ -822,13 +822,13 @@ class MandarinFlashcardApp(QMainWindow):
             # For English to Chinese, show English in main area
             #self.question_text.setPlainText(question)
             self.question_text.setText(question)
-            self.question_text.setFont(QFont("Arial", 64))
+            self.question_text.setFont(QFont("Arial", 36))
             
             # Show pinyin hint when answer is revealed
             if self.pinyin_hints_enabled and self.show_answer:
                 #self.pinyin_text.setPlainText(pinyin_display)
                 self.pinyin_text.setText(pinyin_display)
-                self.pinyin_text.setFont(QFont("Consolas", 64))
+                self.pinyin_text.setFont(QFont("Consolas", 36))
                 self.pinyin_text.setVisible(True)
             else:
                 self.pinyin_text.setVisible(False)
