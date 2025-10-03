@@ -327,13 +327,14 @@ class MandarinFlashcardApp(QMainWindow):
         answer_layout = QVBoxLayout(answer_group)
         answer_group.setMinimumWidth(400)
         
-        self.answer_text = QTextEdit()
+        #self.answer_text = QTextEdit()
+        self.answer_text = QLabel()
         self.answer_text.setFont(QFont("Arial", 64))
         self.answer_text.setMinimumHeight(200)
         self.answer_text.setMaximumHeight(250)
-        self.answer_text.setReadOnly(True)
+        #self.answer_text.setReadOnly(True)
         self.answer_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.answer_text.setVisible(False)  # Initially hidden
+        #self.answer_text.setVisible(False)  # Initially hidden
         answer_layout.addWidget(self.answer_text)
         
         # Show answer button
@@ -835,15 +836,16 @@ class MandarinFlashcardApp(QMainWindow):
         
         # Update answer display
         if self.show_answer:
-            self.answer_text.setPlainText(answer)
+            #self.answer_text.setPlainText(answer)
+            self.answer_text.setText(answer)
             self.answer_text.setVisible(True)
             self.show_answer_btn.setText("Hide Answer")
             
             # Set appropriate font for answer with larger size
             if self.study_direction == "eng_to_zh":
-                self.answer_text.setFont(QFont("Noto Sans CJK SC", 64))
+                self.answer_text.setFont(QFont("Noto Sans CJK SC", 36))
             else:
-                self.answer_text.setFont(QFont("Arial", 56))
+                self.answer_text.setFont(QFont("Arial", 36))
         else:
             self.answer_text.setVisible(False)
             self.show_answer_btn.setText("Show Answer")
