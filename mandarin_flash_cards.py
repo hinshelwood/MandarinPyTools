@@ -4,13 +4,14 @@ import pandas as pd
 import numpy as np
 import tempfile
 import torch
+from datetime import datetime, timedelta
 from pypinyin import pinyin, Style
 from difflib import SequenceMatcher
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QPushButton, QTextEdit, 
                             QFileDialog, QMessageBox, QGroupBox, QCheckBox,
                             QButtonGroup, QRadioButton, QSpacerItem, QSizePolicy,
-                            QProgressBar, QLineEdit, QSlider)
+                            QProgressBar, QLineEdit, QSlider, QComboBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -82,8 +83,8 @@ class ModelLoader(QThread):
 class MandarinFlashcardApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mandarin Flashcard Study Tool")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setWindowTitle("Mandarin Flashcard Study Tool - SRS Edition")
+        self.setGeometry(100, 100, 1200, 900)
         
         # Initialize variables
         self.spark_tts_model = None
@@ -97,6 +98,12 @@ class MandarinFlashcardApp(QMainWindow):
         self.pinyin_hints_enabled = True
         self.study_direction = "zh_to_eng"  # "zh_to_eng" or "eng_to_zh"
         self.show_answer = False
+        self.study_mode = "due_only"  # "due_only", "focus_level", "all"
+        
+        # SRS settings
+        self.new_cards_per_day = 10
+        self.mastery_threshold = 0.80
+        self.min_reviews_for_mastery = 5
         
         # Speed options for TTS
         self.speed_options = ['very_low', 'low', 'moderate', 'high', 'very_high']
@@ -129,7 +136,7 @@ class MandarinFlashcardApp(QMainWindow):
         file_layout = QHBoxLayout(file_group)
         
         self.file_path_edit = QLineEdit()
-        self.file_path_edit.setPlaceholderText("Select CSV file with columns: zh, pinyin, eng")
+        self.file_path_edit.setPlaceholderText("Select CSV file with columns: zh, pinyin, eng, hsk_level, theme")
         file_layout.addWidget(self.file_path_edit)
         
         browse_btn = QPushButton("Browse CSV")
@@ -137,6 +144,29 @@ class MandarinFlashcardApp(QMainWindow):
         file_layout.addWidget(browse_btn)
         
         main_layout.addWidget(file_group)
+        
+        # SRS Info Dashboard
+        srs_info_group = QGroupBox("Spaced Repetition Status")
+        srs_info_layout = QHBoxLayout(srs_info_group)
+        
+        self.focus_level_label = QLabel("Focus Level: N/A")
+        self.focus_level_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        self.focus_level_label.setStyleSheet("color: #2196F3;")
+        srs_info_layout.addWidget(self.focus_level_label)
+        
+        self.due_today_label = QLabel("Due Today: 0")
+        self.due_today_label.setFont(QFont("Arial", 11))
+        srs_info_layout.addWidget(self.due_today_label)
+        
+        self.new_today_label = QLabel("New Today: 0/10")
+        self.new_today_label.setFont(QFont("Arial", 11))
+        srs_info_layout.addWidget(self.new_today_label)
+        
+        self.mastery_progress_label = QLabel("Focus Mastery: 0%")
+        self.mastery_progress_label.setFont(QFont("Arial", 11))
+        srs_info_layout.addWidget(self.mastery_progress_label)
+        
+        main_layout.addWidget(srs_info_group)
         
         # Settings section
         settings_group = QGroupBox("Study Settings")
@@ -160,6 +190,30 @@ class MandarinFlashcardApp(QMainWindow):
         self.direction_button_group.addButton(self.eng_to_zh_radio)
         
         settings_layout.addWidget(direction_group)
+        
+        # Study mode settings
+        mode_group = QGroupBox("Study Mode")
+        mode_layout = QVBoxLayout(mode_group)
+        
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems([
+            "Due Cards + New (Recommended)",
+            "Focus Level Only", 
+            "All Cards (Manual Review)"
+        ])
+        self.mode_combo.currentIndexChanged.connect(self.on_study_mode_changed)
+        mode_layout.addWidget(self.mode_combo)
+        
+        new_cards_layout = QHBoxLayout()
+        new_cards_layout.addWidget(QLabel("New cards/day:"))
+        self.new_cards_spinbox = QComboBox()
+        self.new_cards_spinbox.addItems(['5', '10', '15', '20', '25'])
+        self.new_cards_spinbox.setCurrentText('10')
+        self.new_cards_spinbox.currentTextChanged.connect(self.on_new_cards_changed)
+        new_cards_layout.addWidget(self.new_cards_spinbox)
+        mode_layout.addLayout(new_cards_layout)
+        
+        settings_layout.addWidget(mode_group)
         
         # Hint settings
         hint_group = QGroupBox("Hints")
@@ -214,21 +268,40 @@ class MandarinFlashcardApp(QMainWindow):
         question_layout = QVBoxLayout(question_group)
         question_group.setMinimumWidth(400)
         
+        # Card metadata (HSK level, theme, review info)
+        self.card_metadata = QLabel("")
+        self.card_metadata.setFont(QFont("Arial", 9))
+        self.card_metadata.setStyleSheet("color: #666; font-style: italic;")
+        self.card_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        question_layout.addWidget(self.card_metadata)
+        
+        # Two-panel display for Chinese and Pinyin
+        question_display_layout = QHBoxLayout()
+        
+        # Left panel: Chinese characters
         self.question_text = QTextEdit()
-        self.question_text.setFont(QFont("Arial", 18))
-        self.question_text.setMinimumHeight(150)
-        self.question_text.setMaximumHeight(200)
+        self.question_text.setFont(QFont("Noto Sans CJK SC", 120))
+        self.question_text.setMinimumHeight(250)
+        self.question_text.setMaximumHeight(300)
         self.question_text.setReadOnly(True)
         self.question_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        question_layout.addWidget(self.question_text)
+        self.question_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.question_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        question_display_layout.addWidget(self.question_text)
         
-        # Pinyin hint (initially visible)
-        self.pinyin_hint = QLabel("")
-        self.pinyin_hint.setFont(QFont("Consolas", 14))
-        self.pinyin_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pinyin_hint.setStyleSheet("color: #666; font-style: italic;")
-        self.pinyin_hint.setWordWrap(True)
-        question_layout.addWidget(self.pinyin_hint)
+        # Right panel: Pinyin
+        self.pinyin_text = QTextEdit()
+        self.pinyin_text.setFont(QFont("Consolas", 64))
+        self.pinyin_text.setMinimumHeight(250)
+        self.pinyin_text.setMaximumHeight(300)
+        self.pinyin_text.setReadOnly(True)
+        self.pinyin_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pinyin_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pinyin_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pinyin_text.setStyleSheet("color: #555; background-color: #f9f9f9;")
+        question_display_layout.addWidget(self.pinyin_text)
+        
+        question_layout.addLayout(question_display_layout)
         
         # Audio button (if available)
         if SPARKTTS_AVAILABLE:
@@ -252,9 +325,9 @@ class MandarinFlashcardApp(QMainWindow):
         answer_group.setMinimumWidth(400)
         
         self.answer_text = QTextEdit()
-        self.answer_text.setFont(QFont("Arial", 16))
-        self.answer_text.setMinimumHeight(150)
-        self.answer_text.setMaximumHeight(200)
+        self.answer_text.setFont(QFont("Arial", 64))
+        self.answer_text.setMinimumHeight(200)
+        self.answer_text.setMaximumHeight(250)
         self.answer_text.setReadOnly(True)
         self.answer_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.answer_text.setVisible(False)  # Initially hidden
@@ -318,6 +391,13 @@ class MandarinFlashcardApp(QMainWindow):
         
         scoring_layout.addLayout(score_buttons_layout)
         
+        # SRS interval info
+        self.interval_info = QLabel("")
+        self.interval_info.setFont(QFont("Arial", 9))
+        self.interval_info.setStyleSheet("color: #666; font-style: italic;")
+        self.interval_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scoring_layout.addWidget(self.interval_info)
+        
         main_layout.addWidget(scoring_group)
         
         # Navigation and stats
@@ -346,7 +426,7 @@ class MandarinFlashcardApp(QMainWindow):
         stats_group = QGroupBox("Statistics")
         stats_layout = QVBoxLayout(stats_group)
         
-        self.current_avg_label = QLabel("Current Average: N/A")
+        self.current_avg_label = QLabel("Current Card: N/A")
         self.current_avg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         stats_layout.addWidget(self.current_avg_label)
         
@@ -435,6 +515,12 @@ class MandarinFlashcardApp(QMainWindow):
                 background-color: #4CAF50;
                 border-radius: 3px;
             }
+            QComboBox {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 5px;
+                background-color: white;
+            }
         """)
     
     def load_models(self):
@@ -465,6 +551,17 @@ class MandarinFlashcardApp(QMainWindow):
         """Handle speed slider changes"""
         self.current_speed = self.speed_options[value]
         self.speed_value_label.setText(f"Speed: {self.current_speed}")
+    
+    def on_study_mode_changed(self, index):
+        """Handle study mode changes"""
+        modes = ["due_only", "focus_level", "all"]
+        self.study_mode = modes[index]
+        self.update_study_set()
+    
+    def on_new_cards_changed(self, value):
+        """Handle new cards per day setting change"""
+        self.new_cards_per_day = int(value)
+        self.update_srs_dashboard()
     
     def set_study_direction(self, direction):
         """Set the study direction"""
@@ -498,8 +595,33 @@ class MandarinFlashcardApp(QMainWindow):
                 if 'pinyin' not in self.df.columns:
                     self.df['pinyin'] = None
                 
-                # Initialize score tracking columns
-                score_columns = ['score_zh_to_eng', 'score_eng_to_zh', 'attempts_zh_to_eng', 'attempts_eng_to_zh']
+                # Add HSK level column if it doesn't exist
+                if 'hsk_level' not in self.df.columns:
+                    self.df['hsk_level'] = 1  # Default to HSK 1
+                
+                # Add theme column if it doesn't exist
+                if 'theme' not in self.df.columns:
+                    self.df['theme'] = 'general'
+                
+                # Initialize SRS columns
+                srs_columns = {
+                    'date_added': datetime.now().strftime('%Y-%m-%d'),
+                    'date_last_reviewed': None,
+                    'review_interval_days': 1.0,
+                    'ease_factor': 2.5,
+                    'next_review_date': None,
+                    'times_reviewed': 0,
+                    'times_correct': 0,
+                    'studied_today': 0
+                }
+                
+                for col, default in srs_columns.items():
+                    if col not in self.df.columns:
+                        self.df[col] = default
+                
+                # Initialize score tracking columns (legacy compatibility)
+                score_columns = ['score_zh_to_eng', 'score_eng_to_zh', 
+                               'attempts_zh_to_eng', 'attempts_eng_to_zh']
                 for col in score_columns:
                     if col not in self.df.columns:
                         self.df[col] = None
@@ -509,10 +631,10 @@ class MandarinFlashcardApp(QMainWindow):
                 
                 self.file_path_edit.setText(file_path)
                 self.csv_file_path = file_path
-                self.current_index = 0
-                self.show_answer = False
-                self.update_display()
-                self.update_statistics()
+                
+                # Update study set based on SRS
+                self.update_study_set()
+                
                 self.status_label.setText(f"Loaded {len(self.df)} flashcards")
                 
             except Exception as e:
@@ -528,46 +650,181 @@ class MandarinFlashcardApp(QMainWindow):
                     pinyin_text = ' '.join([''.join(p) for p in pinyin_result])
                     self.df.loc[i, 'pinyin'] = pinyin_text
     
-    def update_display(self):
-        """Update the flashcard display"""
-        if self.df is None or len(self.df) == 0:
+    def get_current_focus_level(self):
+        """Determine which HSK level to draw new cards from"""
+        if self.df is None:
+            return 1
+        
+        for level in [1, 2, 3, 4, 5, 6]:
+            level_cards = self.df[self.df['hsk_level'] == level]
+            
+            if len(level_cards) == 0:
+                continue
+            
+            # Calculate mastery: cards with >= min_reviews and >= mastery_threshold pass rate
+            mastered = level_cards[
+                (level_cards['times_reviewed'] >= self.min_reviews_for_mastery) &
+                (level_cards['times_correct'] / level_cards['times_reviewed'].replace(0, 1) >= self.mastery_threshold)
+            ]
+            
+            mastery_rate = len(mastered) / len(level_cards) if len(level_cards) > 0 else 0
+            
+            # If less than 80% of this level is mastered, focus here
+            if mastery_rate < 0.80:
+                return level
+        
+        # If all levels mastered, continue with HSK 6
+        return 6
+    
+    def get_focus_level_mastery(self):
+        """Get mastery percentage for current focus level"""
+        focus_level = self.get_current_focus_level()
+        level_cards = self.df[self.df['hsk_level'] == focus_level]
+        
+        if len(level_cards) == 0:
+            return 0, 0, 0
+        
+        mastered = level_cards[
+            (level_cards['times_reviewed'] >= self.min_reviews_for_mastery) &
+            (level_cards['times_correct'] / level_cards['times_reviewed'].replace(0, 1) >= self.mastery_threshold)
+        ]
+        
+        mastery_rate = (len(mastered) / len(level_cards)) * 100
+        return mastery_rate, len(mastered), len(level_cards)
+    
+    def update_study_set(self):
+        """Update the current study set based on SRS algorithm and study mode"""
+        if self.df is None:
             return
         
-        row = self.df.iloc[self.current_index]
+        today = pd.Timestamp.now().normalize()
+        
+        if self.study_mode == "due_only":
+            # Get due cards (those that need review today)
+            due_mask = (
+                self.df['next_review_date'].isna() |
+                (pd.to_datetime(self.df['next_review_date'], errors='coerce') <= today)
+            )
+            due_cards = self.df[due_mask].copy()
+            
+            # Add new cards from focus level
+            focus_level = self.get_current_focus_level()
+            never_studied = (self.df['times_reviewed'] == 0) | self.df['times_reviewed'].isna()
+            new_from_focus = self.df[
+                never_studied & 
+                (self.df['hsk_level'] == focus_level) &
+                (self.df['studied_today'] == 0)
+            ].head(self.new_cards_per_day).copy()
+            
+            # Combine
+            study_set = pd.concat([due_cards, new_from_focus]).drop_duplicates()
+            
+        elif self.study_mode == "focus_level":
+            # Only cards from focus level
+            focus_level = self.get_current_focus_level()
+            study_set = self.df[self.df['hsk_level'] == focus_level].copy()
+            
+        else:  # "all"
+            # All cards for manual review
+            study_set = self.df.copy()
+        
+        # Shuffle and update indices
+        if len(study_set) > 0:
+            study_set = study_set.sample(frac=1).reset_index(drop=True)
+            # Store original indices for saving back to main df
+            study_set['original_index'] = study_set.index
+            self.study_df = study_set
+            self.current_index = 0
+            self.show_answer = False
+            self.update_display()
+            self.update_statistics()
+            self.update_srs_dashboard()
+        else:
+            self.study_df = None
+            self.status_label.setText("No cards to study! Great job! 🎉")
+    
+    def update_srs_dashboard(self):
+        """Update the SRS information dashboard"""
+        if self.df is None:
+            return
+        
+        today = pd.Timestamp.now().normalize()
+        
+        # Focus level
+        focus_level = self.get_current_focus_level()
+        self.focus_level_label.setText(f"Focus Level: HSK {focus_level}")
+        
+        # Due cards count
+        due_mask = (
+            self.df['next_review_date'].isna() |
+            (pd.to_datetime(self.df['next_review_date'], errors='coerce') <= today)
+        )
+        due_count = due_mask.sum()
+        self.due_today_label.setText(f"Due Today: {due_count}")
+        
+        # New cards studied today / target
+        studied_today = (self.df['studied_today'] == 1).sum()
+        self.new_today_label.setText(f"New Today: {studied_today}/{self.new_cards_per_day}")
+        
+        # Mastery progress for focus level
+        mastery_pct, mastered_count, total_count = self.get_focus_level_mastery()
+        self.mastery_progress_label.setText(f"HSK {focus_level} Mastery: {mastered_count}/{total_count} ({mastery_pct:.0f}%)")
+    
+    def update_display(self):
+        """Update the flashcard display"""
+        if self.study_df is None or len(self.study_df) == 0:
+            return
+        
+        row = self.study_df.iloc[self.current_index]
         
         # Update card counter
-        self.card_label.setText(f"{self.current_index + 1} / {len(self.df)}")
+        self.card_label.setText(f"{self.current_index + 1} / {len(self.study_df)}")
+        
+        # Display card metadata
+        hsk_level = row.get('hsk_level', 'N/A')
+        theme = row.get('theme', 'general')
+        times_reviewed = row.get('times_reviewed', 0)
+        times_correct = row.get('times_correct', 0)
+        
+        if times_reviewed > 0:
+            accuracy = (times_correct / times_reviewed) * 100
+            self.card_metadata.setText(f"HSK {hsk_level} | {theme} | Reviewed {times_reviewed}x ({accuracy:.0f}% accuracy)")
+        else:
+            self.card_metadata.setText(f"HSK {hsk_level} | {theme} | NEW CARD")
         
         # Set question and answer based on study direction
         if self.study_direction == "zh_to_eng":
             question = str(row['zh'])
             answer = str(row['eng'])
-            # Show pinyin hint for Chinese text
+            pinyin_display = str(row.get('pinyin', ''))
+            
+            # Display Chinese in left panel, Pinyin in right panel
+            self.question_text.setPlainText(question)
+            self.question_text.setFont(QFont("Noto Sans CJK SC", 120))
+            
             if self.pinyin_hints_enabled:
-                pinyin_text = str(row.get('pinyin', ''))
-                self.pinyin_hint.setText(pinyin_text)
-                self.pinyin_hint.setVisible(True)
+                self.pinyin_text.setPlainText(pinyin_display)
+                self.pinyin_text.setFont(QFont("Consolas", 64))
+                self.pinyin_text.setVisible(True)
             else:
-                self.pinyin_hint.setVisible(False)
+                self.pinyin_text.setVisible(False)
+                
         else:  # eng_to_zh
             question = str(row['eng'])
             answer = str(row['zh'])
-            # Show pinyin hint for Chinese answer (when revealed)
+            pinyin_display = str(row.get('pinyin', ''))
+            
+            # For English to Chinese, show English in main area
+            self.question_text.setPlainText(question)
+            self.question_text.setFont(QFont("Arial", 64))
+            
+            # Show pinyin hint when answer is revealed
             if self.pinyin_hints_enabled and self.show_answer:
-                pinyin_text = str(row.get('pinyin', ''))
-                self.pinyin_hint.setText(pinyin_text)
-                self.pinyin_hint.setVisible(True)
+                self.pinyin_text.setPlainText(pinyin_display)
+                self.pinyin_text.setFont(QFont("Consolas", 64))
+                self.pinyin_text.setVisible(True)
             else:
-                self.pinyin_hint.setVisible(False)
-        
-        # Update question text
-        self.question_text.setPlainText(question)
-        
-        # Set appropriate font for Chinese text
-        if self.study_direction == "zh_to_eng":
-            self.question_text.setFont(QFont("Noto Sans CJK SC", 20))
-        else:
-            self.question_text.setFont(QFont("Arial", 18))
+                self.pinyin_text.setVisible(False)
         
         # Update answer display
         if self.show_answer:
@@ -575,14 +832,22 @@ class MandarinFlashcardApp(QMainWindow):
             self.answer_text.setVisible(True)
             self.show_answer_btn.setText("Hide Answer")
             
-            # Set appropriate font for answer
+            # Set appropriate font for answer with larger size
             if self.study_direction == "eng_to_zh":
-                self.answer_text.setFont(QFont("Noto Sans CJK SC", 18))
+                self.answer_text.setFont(QFont("Noto Sans CJK SC", 64))
             else:
-                self.answer_text.setFont(QFont("Arial", 16))
+                self.answer_text.setFont(QFont("Arial", 56))
         else:
             self.answer_text.setVisible(False)
             self.show_answer_btn.setText("Show Answer")
+        
+        # Update interval info
+        interval = row.get('review_interval_days', 1)
+        next_review = row.get('next_review_date')
+        if pd.notna(next_review):
+            self.interval_info.setText(f"Current interval: {interval:.1f} days | Next review: {next_review}")
+        else:
+            self.interval_info.setText(f"Current interval: {interval:.1f} days")
     
     def toggle_answer(self):
         """Toggle answer visibility"""
@@ -590,75 +855,111 @@ class MandarinFlashcardApp(QMainWindow):
         self.update_display()
     
     def record_score(self, score):
-        """Record the user's pass/fail score (0 = fail, 1 = pass)"""
-        if self.df is None:
+        """Record the user's pass/fail score using SRS algorithm"""
+        if self.study_df is None or len(self.study_df) == 0:
             return
         
-        # Determine which score column to update
+        today = pd.Timestamp.now().normalize()
+        
+        # Get current card from study set
+        study_idx = self.current_index
+        original_idx = self.study_df.iloc[study_idx].name
+        
+        # Get current SRS values
+        old_interval = float(self.df.loc[original_idx, 'review_interval_days'])
+        old_ease = float(self.df.loc[original_idx, 'ease_factor'])
+        times_reviewed = int(self.df.loc[original_idx, 'times_reviewed']) if pd.notna(self.df.loc[original_idx, 'times_reviewed']) else 0
+        times_correct = int(self.df.loc[original_idx, 'times_correct']) if pd.notna(self.df.loc[original_idx, 'times_correct']) else 0
+        
+        # Update review counts
+        times_reviewed += 1
+        if score == 1:
+            times_correct += 1
+        
+        # Calculate new interval and ease using SM-2 algorithm
+        if score == 1:  # Pass
+            if times_reviewed == 1:
+                new_interval = 1
+            elif times_reviewed == 2:
+                new_interval = 6
+            else:
+                new_interval = old_interval * old_ease
+            
+            new_ease = min(old_ease + 0.1, 3.0)  # Cap at 3.0
+            
+        else:  # Fail
+            new_interval = 1
+            new_ease = max(old_ease - 0.2, 1.3)  # Floor at 1.3
+        
+        # Calculate next review date
+        next_review = today + pd.Timedelta(days=new_interval)
+        
+        # Update main dataframe
+        self.df.loc[original_idx, 'times_reviewed'] = times_reviewed
+        self.df.loc[original_idx, 'times_correct'] = times_correct
+        self.df.loc[original_idx, 'review_interval_days'] = new_interval
+        self.df.loc[original_idx, 'ease_factor'] = new_ease
+        self.df.loc[original_idx, 'date_last_reviewed'] = today.strftime('%Y-%m-%d')
+        self.df.loc[original_idx, 'next_review_date'] = next_review.strftime('%Y-%m-%d')
+        
+        # Mark as studied today if it was a new card
+        if times_reviewed == 1:
+            self.df.loc[original_idx, 'studied_today'] = 1
+        
+        # Also update legacy score tracking for compatibility
         score_col = f"score_{self.study_direction}"
         attempts_col = f"attempts_{self.study_direction}"
         
-        # Get current scores and attempts
-        current_scores = self.df.iloc[self.current_index].get(score_col)
-        current_attempts = self.df.iloc[self.current_index].get(attempts_col)
-        
-        # Parse existing scores (stored as comma-separated values)
+        current_scores = self.df.loc[original_idx, score_col]
         if pd.isna(current_scores) or not str(current_scores).strip():
             scores_list = []
         else:
             scores_list = [int(x) for x in str(current_scores).split(',') if x.strip()]
         
-        if pd.isna(current_attempts):
-            attempts = 0
-        else:
-            attempts = int(current_attempts)
-        
-        # Add new score
         scores_list.append(score)
-        attempts += 1
-        
-        # Update dataframe
-        self.df.loc[self.current_index, score_col] = ','.join(map(str, scores_list))
-        self.df.loc[self.current_index, attempts_col] = attempts
+        self.df.loc[original_idx, score_col] = ','.join(map(str, scores_list))
+        self.df.loc[original_idx, attempts_col] = times_reviewed
         
         # Save progress
         self.save_csv()
         
         # Update statistics
         self.update_statistics()
+        self.update_srs_dashboard()
+        
+        # Provide feedback
+        result_text = "Correct! ✓" if score == 1 else "Need more practice ✗"
+        if score == 1:
+            self.status_label.setText(f"{result_text} | Next review in {new_interval:.0f} days")
+        else:
+            self.status_label.setText(f"{result_text} | Will review again in 1 day")
         
         # Move to next card automatically
-        QTimer.singleShot(500, self.next_card)  # Small delay for user feedback
-        
-        result_text = "Correct!" if score == 1 else "Need more practice"
-        self.status_label.setText(f"{result_text}")
+        QTimer.singleShot(500, self.next_card)
     
-    def calculate_pass_rate(self, index, direction):
-        """Calculate pass rate (percentage) for a specific card and direction"""
-        score_col = f"score_{direction}"
-        scores_str = self.df.iloc[index].get(score_col)
+    def calculate_pass_rate(self, index):
+        """Calculate pass rate (percentage) for a specific card"""
+        times_reviewed = self.df.loc[index, 'times_reviewed']
+        times_correct = self.df.loc[index, 'times_correct']
         
-        if pd.isna(scores_str) or not str(scores_str).strip():
+        if pd.isna(times_reviewed) or times_reviewed == 0:
             return None
         
-        try:
-            scores = [int(x) for x in str(scores_str).split(',') if x.strip()]
-            if not scores:
-                return None
-            
-            pass_count = sum(scores)  # Count of 1s (passes)
-            total_attempts = len(scores)
-            return (pass_count / total_attempts) * 100
-        except:
-            return None
+        return (times_correct / times_reviewed) * 100
     
     def update_statistics(self):
         """Update the statistics display"""
         if self.df is None or len(self.df) == 0:
             return
         
+        if self.study_df is None or len(self.study_df) == 0:
+            return
+        
         # Current card pass rate
-        current_pass_rate = self.calculate_pass_rate(self.current_index, self.study_direction)
+        study_idx = self.current_index
+        original_idx = self.study_df.iloc[study_idx].name
+        
+        current_pass_rate = self.calculate_pass_rate(original_idx)
         if current_pass_rate is not None:
             self.current_avg_label.setText(f"Current Card: {current_pass_rate:.0f}% pass rate")
             # Color code based on performance
@@ -676,26 +977,12 @@ class MandarinFlashcardApp(QMainWindow):
             self.current_avg_label.setStyleSheet("")
         
         # Overall pass rate
-        all_pass_rates = []
-        cards_studied = 0
-        total_passes = 0
-        total_attempts = 0
-        
-        for i in range(len(self.df)):
-            pass_rate = self.calculate_pass_rate(i, self.study_direction)
-            if pass_rate is not None:
-                cards_studied += 1
-                
-                # Get raw scores for overall calculation
-                score_col = f"score_{self.study_direction}"
-                scores_str = self.df.iloc[i].get(score_col)
-                if not pd.isna(scores_str) and str(scores_str).strip():
-                    scores = [int(x) for x in str(scores_str).split(',') if x.strip()]
-                    total_passes += sum(scores)
-                    total_attempts += len(scores)
+        cards_studied = (self.df['times_reviewed'] > 0).sum()
+        total_attempts = self.df['times_reviewed'].sum()
+        total_correct = self.df['times_correct'].sum()
         
         if total_attempts > 0:
-            overall_pass_rate = (total_passes / total_attempts) * 100
+            overall_pass_rate = (total_correct / total_attempts) * 100
             self.overall_avg_label.setText(f"Overall: {overall_pass_rate:.0f}% pass rate")
         else:
             self.overall_avg_label.setText("Overall: No attempts yet")
@@ -704,18 +991,18 @@ class MandarinFlashcardApp(QMainWindow):
     
     def previous_card(self):
         """Go to previous card"""
-        if self.df is None or len(self.df) == 0:
+        if self.study_df is None or len(self.study_df) == 0:
             return
-        self.current_index = (self.current_index - 1) % len(self.df)
+        self.current_index = (self.current_index - 1) % len(self.study_df)
         self.show_answer = False
         self.update_display()
         self.update_statistics()
     
     def next_card(self):
         """Go to next card"""
-        if self.df is None or len(self.df) == 0:
+        if self.study_df is None or len(self.study_df) == 0:
             return
-        self.current_index = (self.current_index + 1) % len(self.df)
+        self.current_index = (self.current_index + 1) % len(self.study_df)
         self.show_answer = False
         self.update_display()
         self.update_statistics()
@@ -726,11 +1013,13 @@ class MandarinFlashcardApp(QMainWindow):
             QMessageBox.warning(self, "Warning", "Audio generation not available")
             return
         
-        if self.df is None:
+        if self.study_df is None or len(self.study_df) == 0:
             return
         
         # Always generate audio for the Chinese text
-        text = str(self.df.iloc[self.current_index]['zh'])
+        study_idx = self.current_index
+        original_idx = self.study_df.iloc[study_idx].name
+        text = str(self.df.loc[original_idx, 'zh'])
         
         self.audio_generator = AudioGenerator(self.spark_tts_model, text, self.current_speed)
         self.audio_generator.progress.connect(self.update_status)
@@ -772,6 +1061,12 @@ class MandarinFlashcardApp(QMainWindow):
             print(f"Progress saved to {self.csv_file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save progress: {str(e)}")
+    
+    def reset_daily_flags(self):
+        """Reset daily flags (call this at the start of a new day)"""
+        if self.df is not None:
+            self.df['studied_today'] = 0
+            self.save_csv()
     
     def closeEvent(self, event):
         """Handle application closing"""

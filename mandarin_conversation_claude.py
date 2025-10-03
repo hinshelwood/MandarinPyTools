@@ -101,6 +101,24 @@ class APIKeyDialog(QDialog):
         model_layout.addWidget(self.model_combo)
         layout.addWidget(model_group)
         
+        # HSK Level Selection
+        hsk_group = QGroupBox("Language Level")
+        hsk_layout = QVBoxLayout(hsk_group)
+        
+        self.hsk_combo = QComboBox()
+        self.hsk_combo.addItems([
+            "HSK 1 - Absolute Beginner (~150 words)",
+            "HSK 2 - Beginner (~300 words)",
+            "HSK 3 - Elementary (~600 words)",
+            "HSK 4 - Intermediate (~1200 words)",
+            "HSK 5 - Upper Intermediate (~2500 words)",
+            "HSK 6 - Advanced (~5000 words)"
+        ])
+        self.hsk_combo.setCurrentIndex(1)  # Default to HSK 2
+        hsk_layout.addWidget(QLabel("Choose difficulty:"))
+        hsk_layout.addWidget(self.hsk_combo)
+        layout.addWidget(hsk_group)
+        
         btn_layout = QHBoxLayout()
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self.accept)
@@ -113,9 +131,14 @@ class APIKeyDialog(QDialog):
     def get_config(self):
         model_text = self.model_combo.currentText()
         model = "claude-3-5-haiku-20241022" if "haiku" in model_text.lower() else "claude-3-5-sonnet-20241022"
+        
+        hsk_text = self.hsk_combo.currentText()
+        hsk_level = int(hsk_text.split()[1])  # Extract number from "HSK X - ..."
+        
         return {
             'api_key': self.api_key_input.text().strip(),
-            'model': model
+            'model': model,
+            'hsk_level': hsk_level
         }
 
 class TranslationThread(QThread):
@@ -149,28 +172,50 @@ class TranslationThread(QThread):
 class ClaudeConversationThread(QThread):
     finished = pyqtSignal(bool, str, str)
     
-    def __init__(self, api_key, model, conversation_history, user_message):
+    def __init__(self, api_key, model, conversation_history, user_message, hsk_level=2):
         super().__init__()
         self.api_key = api_key
         self.model = model
         self.conversation_history = conversation_history
         self.user_message = user_message
+        self.hsk_level = hsk_level
     
     def run(self):
         try:
             client = anthropic.Anthropic(api_key=self.api_key)
             
-            system_prompt = """你是美玲，一个友好的中文会话伙伴。你在帮助学生练习说中文。
+            # HSK-specific vocabulary and complexity guidelines
+            hsk_guidelines = {
+                1: "HSK 1 vocabulary only (~150 words). Use very simple patterns like: 你好, 这是, 我喜欢, 多少钱. Keep responses to 3-5 words maximum.",
+                2: "HSK 1-2 vocabulary (~300 words). Simple sentences with 你想, 我觉得, 在哪儿. Maximum 8 words per response.",
+                3: "HSK 1-3 vocabulary (~600 words). Use simple connectors like 因为, 所以, 但是. Maximum 12 words per response.",
+                4: "HSK 1-4 vocabulary (~1200 words). Can use 虽然, 不但, 而且. Keep responses under 15 words.",
+                5: "HSK 1-5 vocabulary (~2500 words). Natural but clear speech. Maximum 20 words per response.",
+                6: "HSK 1-6 vocabulary (~5000 words). Natural conversational Chinese. Maximum 25 words per response."
+            }
+            
+            system_prompt = f"""你是美玲，一个友好的中文会话伙伴。你在帮助学生练习说中文。
 
-规则：
-- 总是用简体中文回复
-- 保持回复简短自然，1-3句话
-- 根据学生的水平调整难度
-- 温柔地纠正重大错误
-- 提出后续问题保持对话流畅
-- 要有鼓励和耐心
-- 像朋友一样聊天，不要像老师
-- 如果学生说英语，温柔地用中文回应"""
+CRITICAL RULES:
+- {hsk_guidelines.get(self.hsk_level, hsk_guidelines[2])}
+- 像朋友一样自然聊天，不要当老师讲课
+- 如果学生问你吃饭，就说"好啊"或"不饿"，不要解释你是AI
+- 不要列出清单或选项，只是正常聊天
+- 保持话题轻松有趣
+- 用简短的回应，像微信聊天一样
+- 温柔地纠正大错误，但不要每次都纠正
+- 如果学生说英语，用简单中文回应
+
+TONE EXAMPLES (HSK {self.hsk_level}):
+Student: "你想吃饭吗？" 
+✅ Good: "好啊！你想吃什么？"
+❌ Bad: "我很高兴你邀请我聊吃东西！作为AI助手，我不能真正吃东西，但我很乐意和你聊聊美食。中国有很多美味的食物，比如：北京烤鸭..."
+
+Student: "你喜欢什么？"
+✅ Good: "我喜欢看书。你呢？"
+❌ Bad: "这是一个很好的问题！我喜欢很多东西。让我给你列举几个..."
+
+REMEMBER: 短回答！自然！不要解释！"""
             
             messages = []
             for msg in self.conversation_history:
@@ -183,9 +228,10 @@ class ClaudeConversationThread(QThread):
             
             response = client.messages.create(
                 model=self.model,
-                max_tokens=200,
+                max_tokens=100,  # Reduced from 200 to encourage brevity
                 system=system_prompt,
-                messages=messages
+                messages=messages,
+                temperature=0.8  # Higher temperature for more natural conversation
             )
             
             response_text = response.content[0].text
@@ -863,11 +909,14 @@ class MeilingConversationApp(QMainWindow):
         
         self.status_label.setText("美玲 is thinking...")
         
+        hsk_level = self.config.get('hsk_level', 2)
+        
         self.claude_thread = ClaudeConversationThread(
             self.config['api_key'],
             self.config.get('model', 'claude-3-5-haiku-20241022'),
             self.conversation_history[:-1],
-            user_message
+            user_message,
+            hsk_level
         )
         self.claude_thread.finished.connect(self.on_api_response_received)
         self.claude_thread.start()
